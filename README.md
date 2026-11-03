@@ -3,13 +3,14 @@
 [![CI](https://github.com/PropSim-Enterprise/prop-firm-rules/actions/workflows/ci.yml/badge.svg)](https://github.com/PropSim-Enterprise/prop-firm-rules/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`prop-firm-rules` evaluates prop firm challenge rules against a trading account's history: **profit target**, **max daily loss** (daily drawdown), **max overall loss**, **trailing drawdown**, **minimum and maximum trading days**, and the **consistency rule**. Give it the starting balance, the rules and time-ordered balance and equity snapshots from MetaTrader 4/5 (MT4/MT5), cTrader, a futures platform or your own simulator, and it tells you whether the funded trader evaluation is passed, failed or still in progress, which rule was breached and when, and how close the account is to every limit right now. Use it to build prop trading dashboards, drawdown and daily loss limit calculators, risk management alerts, trading journals, or to check the numbers of your own prop firm platform. Written in TypeScript, zero dependencies, runs in Node 20+ and the browser.
+`prop-firm-rules` evaluates prop firm challenge rules against a trading account's history: **profit target**, **max daily loss** (daily drawdown), **max overall loss**, **trailing drawdown**, **minimum and maximum trading days**, the **consistency rule**, and the **news rule** (no trade opened or closed in the minutes around a central bank rate decision). Give it the starting balance, the rules and time-ordered balance and equity snapshots from MetaTrader 4/5 (MT4/MT5), cTrader, a futures platform or your own simulator, and it tells you whether the funded trader evaluation is passed, failed or still in progress, which rule was breached and when, and how close the account is to every limit right now. Use it to build prop trading dashboards, drawdown and daily loss limit calculators, risk management alerts, trading journals, or to check the numbers of your own prop firm platform. Written in TypeScript, zero dependencies, runs in Node 20+ and the browser.
 
 - [Install](#install)
 - [Quick example](#quick-example)
 - [How evaluation works](#how-evaluation-works)
 - [The rules](#the-rules)
 - [Day reset and time zones](#day-reset-and-time-zones)
+- [News rule](#news-rule)
 - [Helpers](#helpers)
 - [Rules from the landing page templates](#rules-from-the-landing-page-templates)
 - [FAQ](#faq)
@@ -119,8 +120,9 @@ result.breaches; // [{
 | `startingBalance` | The account's initial balance. |
 | `rules` | The rules, as `{ code, params }`. Percent params are percents: `5` means 5%. |
 | `snapshots` | `{ time, balance, equity }` in time order. **balance** is the closed balance (starting balance plus realised P&L); **equity** is balance plus the floating P&L of open positions. |
-| `trades` (optional) | `{ openTime, closeTime, profit }`, in any order. Leave `closeTime` out (or `null`) for a position that is still open. `profit` is net of commission and swap. Trades only decide trading days and daily profit: balance and equity always come from the snapshots. |
+| `trades` (optional) | `{ openTime, closeTime, profit, symbol? }`, in any order. `symbol` is only read by `NEWS_TRADING`. Leave `closeTime` out (or `null`) for a position that is still open. `profit` is net of commission and swap. Trades only decide trading days and daily profit: balance and equity always come from the snapshots. |
 | `dayResetUtcOffsetMinutes` (optional) | When the trading day resets, as a UTC offset in minutes. Default `0` (00:00 UTC). See [Day reset and time zones](#day-reset-and-time-zones). |
+| `newsEvents` (with `NEWS_TRADING`) | `{ bank, currency, t, name? }`, in any order: the news the [news rule](#news-rule) keeps trades away from. Pass `[]` for none. |
 
 Times can be ISO 8601 strings, `Date` objects or epoch milliseconds.
 
@@ -129,7 +131,7 @@ Times can be ISO 8601 strings, `Date` objects or epoch milliseconds.
 The engine replays the history in time order, starting from a flat account at `startingBalance`:
 
 1. Every snapshot updates balance, equity, the high-water marks and the current trading day.
-2. After every snapshot, each **limit rule** is checked (`MAX_DAILY_LOSS`, `MAX_OVERALL_LOSS`, `TRAILING_DRAWDOWN`, `MAX_TRADING_DAYS`). If any is broken the challenge **fails** at that moment.
+2. After every snapshot, each **limit rule** is checked (`MAX_DAILY_LOSS`, `MAX_OVERALL_LOSS`, `TRAILING_DRAWDOWN`, `MAX_TRADING_DAYS`, `NEWS_TRADING`). If any is broken the challenge **fails** at that moment.
 3. Otherwise, if every **objective** is met (`PROFIT_TARGET`, plus `MIN_TRADING_DAYS` and `CONSISTENCY` when present), the challenge **passes** at that moment.
 4. Data after the pass or fail is ignored. If neither happens, the status is `in_progress`.
 
@@ -150,7 +152,7 @@ Days are reset-adjusted: with `dayResetUtcOffsetMinutes: 120`, a trade at 22:30 
 |---|---|
 | `status` | `"passed"`, `"failed"` or `"in_progress"`. |
 | `endedAt` | When it passed or failed (ISO 8601, UTC), else `null`. |
-| `breaches` | Every rule broken at the moment of failure, in rule order: `{ code, time, day, limit, value, message }`. `limit` is the equity floor (days for `MAX_TRADING_DAYS`), `value` is the equity (days traded) that broke it. |
+| `breaches` | Every rule broken at the moment of failure, in rule order: `{ code, time, day, limit, value, message }`. `limit` is the equity floor (days for `MAX_TRADING_DAYS`, minutes for `NEWS_TRADING`), `value` is the equity (days traded, minutes from the news) that broke it. `NEWS_TRADING` breaches also give the `trade` (its index in `trades`) and the `news` window. |
 | `progress` | One entry per rule, in rule order, as of the end: profit vs target, today's floor and loss, distance to each floor, days traded, consistency ratio. |
 | `metrics` | Balance, equity, profit, high-water mark, lowest equity, max drawdown (amount and % of starting balance), trading days, and a per-day summary. |
 
@@ -165,6 +167,7 @@ Days are reset-adjusted: with `dayResetUtcOffsetMinutes: 120`, a trade at 22:30 
 | `MIN_TRADING_DAYS` | `minDays` | objective | trading days ≥ minDays |
 | `MAX_TRADING_DAYS` | `maxDays` | limit | trading days > maxDays before passing |
 | `CONSISTENCY` | `maxDayPercent` | objective | best day ≤ maxDayPercent of total profit |
+| `NEWS_TRADING` | `minutesBefore`, `minutesAfter?`, `instruments?` | limit | a trade opened or closed inside a news window of its currencies ([News rule](#news-rule)) |
 
 Equity exactly at a floor is allowed; a cent below is a breach. A balance exactly at the target passes.
 
@@ -295,6 +298,98 @@ Any `(time: Date) => number` works, for other daylight saving rules.
 
 ISO strings without a timezone (`"2026-03-02T23:30:00"`) are read as **UTC**, not the machine's local time, so results don't depend on where the code runs. MT4/MT5 reports print **server time**: convert it, or add the offset (`"2026-03-02T23:30:00+02:00"`).
 
+## News rule
+
+Many firms ban trading around high-impact news: no trade may be **opened or closed** in the few minutes before and after it. `NEWS_TRADING` checks that against the trades' symbols and a list of news events. The engine stays pure: the news comes in as data, `newsEvents`, so any calendar works.
+
+```
+window = (t − minutesBefore, t + minutesAfter)
+fails when a trade of an instrument in the event's currency is opened or closed inside the window
+```
+
+A trade held through the news, opened before the window and closed after it, is allowed: firms that ban holding positions through news need a stricter check than this one. A trade exactly at an edge of the window is allowed. `minutesAfter` defaults to `minutesBefore`. The rule only reads `trades`, so pass them, each with its `symbol`.
+
+Central bank rate decisions come ready to use from [InterestRateDecision.com](https://interestratedecision.com/calendar/?via=prop-rules-news)'s open data: every decision of the Fed, ECB, BoE, BoJ, BoC, RBA, RBNZ, SNB, Norges Bank and Riksbank, the ones to come and every one since 2008.
+
+```ts
+import { evaluateChallenge } from "prop-firm-rules";
+import { fetchIRDNewsWindows } from "prop-firm-rules/ird";
+
+const newsEvents = await fetchIRDNewsWindows({ history: true });
+// [{ bank: "boe", currency: "GBP", t: "2008-01-10T12:00:00.000Z", name: "Bank of England" }, ...]
+
+const result = evaluateChallenge({
+  startingBalance: 100_000,
+  rules: [
+    { code: "MAX_DAILY_LOSS", params: { maxPercent: 5 } },
+    { code: "NEWS_TRADING", params: { minutesBefore: 2, minutesAfter: 2 } },
+  ],
+  snapshots: [
+    { time: "2026-10-28T17:30:00Z", balance: 100_420, equity: 100_420 },
+    { time: "2026-10-28T18:20:00Z", balance: 101_030, equity: 101_030 },
+  ],
+  trades: [
+    { openTime: "2026-10-28T14:00:00Z", closeTime: "2026-10-28T17:30:00Z", profit: 420, symbol: "EURUSD" },
+    { openTime: "2026-10-28T18:01:00Z", closeTime: "2026-10-28T18:20:00Z", profit: 610, symbol: "XAUUSD" },
+  ],
+  newsEvents,
+});
+
+result.status;   // "failed": the gold trade opened a minute after the Fed's decision
+result.breaches; // [{
+                 //   code: "NEWS_TRADING",
+                 //   time: "2026-10-28T18:01:00.000Z",
+                 //   day: "2026-10-28",
+                 //   limit: 2,
+                 //   value: 1,
+                 //   message: "XAUUSD trade opened 1 minute after the Federal Reserve announcement (USD) at 2026-10-28T18:00:00.000Z; trades must keep 2 minutes after it",
+                 //   trade: 1,
+                 //   news: { bank: "fed", name: "Federal Reserve", currency: "USD", time: "2026-10-28T18:00:00.000Z",
+                 //           start: "2026-10-28T17:58:00.000Z", end: "2026-10-28T18:02:00.000Z" },
+                 // }]
+```
+
+`prop-firm-rules/ird` is the only part of the package that uses the network, and it is optional. To fetch the data yourself (on a server, once a day, cached), pass it to the pure converter:
+
+```ts
+import { newsWindowsFromIRD } from "prop-firm-rules";
+
+const next = await (await fetch("https://interestratedecision.com/data/next.json")).json();     // decisions to come
+const csv = await (await fetch("https://interestratedecision.com/data/decisions.csv")).text(); // every past decision
+const newsEvents = newsWindowsFromIRD(next, csv, { banks: ["fed", "ecb", "boe"], from: "2026-01-01" });
+```
+
+| Option | Meaning |
+|---|---|
+| `banks` | Only these banks' decisions (`fed`, `ecb`, `boe`, `boj`, `boc`, `rba`, `rbnz`, `snb`, `norges`, `riksbank`). |
+| `currencies` | Bank to currency, merged over `BANK_CURRENCIES`. A bank with no currency is skipped. |
+| `from`, `to` | Only decisions in this period. |
+| `history` (fetch only) | Also fetch `decisions.csv`. Without it, only the decisions to come. |
+| `fetch`, `baseUrl` (fetch only) | Your own fetch and address, for tests and proxies. |
+
+Decision times from [InterestRateDecision.com](https://interestratedecision.com/?via=prop-rules-news). Its data is free to reuse with a link to it. A decision whose date the bank has not confirmed is marked tentative on its [calendar](https://interestratedecision.com/calendar/?via=prop-rules-news) and can move: fetch again before relying on it.
+
+### Which news counts for an instrument
+
+The news of the instrument's own currencies: base and quote. `instrumentCurrencies(symbol)` shows what the rule reads:
+
+| Symbol | Currencies | Why |
+|---|---|---|
+| `EURUSD`, `EUR/USD`, `eurusd.raw`, `EURUSDm` | EUR, USD | base and quote; suffixes and separators are ignored |
+| `XAUUSD`, `XAGUSD` | USD | gold and silver are dollar instruments: their news is the Fed's |
+| `BTCUSD` | USD | only the quote is a currency |
+| `US30`, `NAS100`, `US500`, `USOIL` | USD | `DEFAULT_INSTRUMENTS` |
+| `GER40`, `UK100`, `JP225`, `AUS200` | EUR, GBP, JPY, AUD | `DEFAULT_INSTRUMENTS` |
+| anything else | none | not checked; listed in `progress.uncheckedSymbols` |
+
+Add or override instruments with the rule's `instruments` param, merged over `DEFAULT_INSTRUMENTS` and matched against the start of the symbol:
+
+```ts
+{ code: "NEWS_TRADING", params: { minutesBefore: 5, instruments: { COPPER: ["USD"], EURGBP: ["EUR", "GBP", "USD"] } } }
+```
+
+A trade with no `symbol` is not checked. `progress` says how many trade opens and closes were `checked` and `unchecked`, and gives `nextWindow`, the first window not over at the last event, for a "no trading until" banner.
+
 ## Helpers
 
 Small pure functions for calculators and UIs. The engine uses the same functions, so numbers in your UI match the evaluation.
@@ -351,6 +446,10 @@ newYorkCloseOffset("2026-07-01T12:00:00Z");              // 180
 | `requiredProfitForConsistency(bestDay, maxDayPercent)` | The total profit that satisfies the consistency rule. |
 | `tradingDayKey(time, offset?)` | The reset-adjusted trading day, `YYYY-MM-DD`. |
 | `newYorkCloseOffset(time)` | 180 or 120: the UTC offset of a New York close server. |
+| `instrumentCurrencies(symbol, instruments?)` | The currencies whose news the news rule checks for a symbol. |
+| `newsWindows(events, minutesBefore, minutesAfter?)` | The window around each event, for a calendar of no-trading times. |
+| `newsWindowsFromIRD(nextJson, decisionsCsv?, options?)` | News events from InterestRateDecision.com's open data. See [News rule](#news-rule). |
+| `fetchIRDNewsWindows(options?)` | The same, fetched for you (from `prop-firm-rules/ird`). |
 
 Invalid input throws `InvalidInputError`, with a message that names the field (`"MAX_DAILY_LOSS.maxPercent must be a finite number, got \"5\""`).
 
@@ -398,6 +497,10 @@ When you pass `trades`, a day on which a trade was opened: holding a position ov
 
 Another objective isn't met yet: not enough trading days (`MIN_TRADING_DAYS`), or the best day is too large a share of the profit (`CONSISTENCY`). The `progress` entries say which, and how far off it is. Also check that the profit is closed: floating profit doesn't count toward the target.
 
+### Does it support the news trading rule?
+
+Yes. `NEWS_TRADING` fails a trade opened or closed within N minutes of a news event in one of the instrument's currencies, like the "2 minutes before and after" rule many firms use. Central bank decisions come from InterestRateDecision.com's free data; for other news (jobs reports, inflation), pass your own `newsEvents`. See [News rule](#news-rule).
+
 ### Does it support a calendar time limit, like 30 days to pass?
 
 Not as a rule. `MAX_TRADING_DAYS` counts trading days. For a calendar deadline, compare the challenge's start date with today yourself.
@@ -408,7 +511,7 @@ Yes. Leave out `PROFIT_TARGET`: the account can then only fail, and `progress` s
 
 ### Does it run in the browser?
 
-Yes. It has no dependencies and uses no Node APIs.
+Yes. It has no dependencies and uses no Node APIs. Only `prop-firm-rules/ird` uses the network, through the global `fetch`.
 
 ## Rules vary between firms
 
@@ -429,4 +532,6 @@ npm run build      # tsc -> dist/ (.js + .d.ts)
 
 ---
 
-Built by [PropSim](https://propsim.markets/?utm_source=github&utm_medium=readme&utm_campaign=prop-firm-rules), prop firm software that enforces these rules on every tick. Starting a prop firm? Get the free [prop firm landing page templates](https://github.com/PropSim-Enterprise/prop-firm-landing-page-templates) too.
+Built by [PropSim](https://propsim.markets/?utm_source=github&utm_medium=readme&utm_campaign=prop-firm-rules), prop firm software that enforces these rules on every tick. Starting a prop firm? Get the free [prop firm landing page templates](https://github.com/PropSim-Enterprise/prop-firm-landing-page-templates) too. Decision times from [InterestRateDecision.com](https://interestratedecision.com/?via=prop-rules-news).
+
+Part of the Forexia network: [InterestRateDecision.com](https://interestratedecision.com/?via=prop-rules-news) · [Forexia Academy](https://forexiapro.com/courses?via=prop-rules-news) · [TradingSignalBot](https://tradingsignalbot.com/?via=prop-rules-news) · [PropSim](https://propsim.markets/?via=prop-rules-news) · [OpenCharts](https://github.com/dylanpersonguy/OpenCharts)

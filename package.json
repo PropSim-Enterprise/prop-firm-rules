@@ -1,7 +1,7 @@
 {
   "name": "prop-firm-rules",
-  "version": "0.1.0",
-  "description": "Prop firm challenge rules engine for TypeScript: profit target, max daily loss, max overall loss, trailing drawdown, minimum and maximum trading days, and consistency, evaluated against an account's balance and equity history.",
+  "version": "0.2.0",
+  "description": "Prop firm challenge rules engine for TypeScript: profit target, max daily loss, max overall loss, trailing drawdown, minimum and maximum trading days, consistency, and news trading windows around central bank decisions, evaluated against an account's balance and equity history.",
   "keywords": [
     "prop firm",
     "prop trading",
@@ -17,6 +17,10 @@
     "profit target",
     "max drawdown",
     "consistency rule",
+    "news trading",
+    "news rule",
+    "central bank",
+    "interest rate decision",
     "mt4",
     "mt5",
     "forex",
@@ -41,11 +45,16 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./ird": {
+      "types": "./dist/ird-fetch.d.ts",
+      "default": "./dist/ird-fetch.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "sideEffects": false,

@@ -1,4 +1,4 @@
-import type { AccountSnapshot, DailyLossBasis, Rule, Trade, TrailingSource } from "../src/index.js";
+import type { AccountSnapshot, DailyLossBasis, NewsEvent, Rule, Trade, TrailingSource } from "../src/index.js";
 
 export const START = 100_000;
 
@@ -7,8 +7,9 @@ export function snap(time: string, balance: number, equity: number = balance): A
   return { time, balance, equity };
 }
 
-export function trade(openTime: string, closeTime: string | null, profit?: number): Trade {
-  return profit === undefined ? { openTime, closeTime } : { openTime, closeTime, profit };
+export function trade(openTime: string, closeTime: string | null, profit?: number, symbol?: string): Trade {
+  const base: Trade = profit === undefined ? { openTime, closeTime } : { openTime, closeTime, profit };
+  return symbol === undefined ? base : { ...base, symbol };
 }
 
 export const target = (targetPercent: number): Rule => ({ code: "PROFIT_TARGET", params: { targetPercent } });
@@ -28,3 +29,17 @@ export const minDays = (days: number): Rule => ({ code: "MIN_TRADING_DAYS", para
 export const maxDays = (days: number): Rule => ({ code: "MAX_TRADING_DAYS", params: { maxDays: days } });
 
 export const consistency = (maxDayPercent: number): Rule => ({ code: "CONSISTENCY", params: { maxDayPercent } });
+
+export const newsRule = (minutesBefore: number, minutesAfter?: number): Rule =>
+  minutesAfter === undefined
+    ? { code: "NEWS_TRADING", params: { minutesBefore } }
+    : { code: "NEWS_TRADING", params: { minutesBefore, minutesAfter } };
+
+/** The Fed's December 2026 decision and the ECB's, as newsWindowsFromIRD gives them. */
+export const FED: NewsEvent = { bank: "fed", currency: "USD", t: "2026-12-09T19:00:00.000Z", name: "Federal Reserve" };
+export const ECB: NewsEvent = {
+  bank: "ecb",
+  currency: "EUR",
+  t: "2026-12-17T13:15:00.000Z",
+  name: "European Central Bank",
+};

@@ -22,6 +22,27 @@ export interface Trade {
   closeTime?: TimeInput | null;
   /** Net realised P&L, after commission and swap. Required once `closeTime` is set. */
   profit?: number;
+  /**
+   * The instrument traded (`EURUSD`, `XAUUSD`, `US30.cash`). Only NEWS_TRADING reads it:
+   * a trade without one is not checked against the news.
+   */
+  symbol?: string;
+}
+
+/**
+ * A scheduled release, such as a central bank rate decision. NEWS_TRADING puts a
+ * window around `t` and checks the trades of instruments in `currency`.
+ * `newsWindowsFromIRD` builds these from InterestRateDecision.com's open data.
+ */
+export interface NewsEvent {
+  /** Who releases it (`fed`, `ecb`, `boe`...). Shown in breach messages. */
+  bank: string;
+  /** The currency it moves, as an ISO 4217 code: `USD`, `EUR`. */
+  currency: string;
+  /** When it is released. */
+  t: TimeInput;
+  /** A readable name for messages, such as "Federal Reserve". Defaults to `bank`. */
+  name?: string;
 }
 
 /**
@@ -92,6 +113,24 @@ export interface ConsistencyRule {
   params: { maxDayPercent: number };
 }
 
+/**
+ * Fail when a trade is opened or closed less than minutesBefore before, or less
+ * than minutesAfter after, a news event in one of the instrument's currencies.
+ */
+export interface NewsTradingRule {
+  code: "NEWS_TRADING";
+  params: {
+    minutesBefore: number;
+    /** Defaults to minutesBefore. */
+    minutesAfter?: number;
+    /**
+     * Currencies of instruments that are not currency pairs, or overrides:
+     * `{ "US30": ["USD"], "GER40": ["EUR"] }`. Merged over DEFAULT_INSTRUMENTS.
+     */
+    instruments?: Readonly<Record<string, readonly string[]>>;
+  };
+}
+
 /** A challenge rule. Percent params are percents: 5 means 5%. */
 export type Rule =
   | ProfitTargetRule
@@ -100,7 +139,8 @@ export type Rule =
   | TrailingDrawdownRule
   | MinTradingDaysRule
   | MaxTradingDaysRule
-  | ConsistencyRule;
+  | ConsistencyRule
+  | NewsTradingRule;
 
 export type RuleCode = Rule["code"];
 
@@ -119,6 +159,8 @@ export interface ChallengeInput {
   trades?: readonly Trade[];
   /** When the trading day resets. Defaults to 0 (00:00 UTC). */
   dayResetUtcOffsetMinutes?: DayResetOffset;
+  /** The news NEWS_TRADING checks trades against, in any order. Required with that rule. */
+  newsEvents?: readonly NewsEvent[];
 }
 
 export type ChallengeStatus = "passed" | "failed" | "in_progress";
@@ -130,11 +172,21 @@ export interface Breach {
   time: string;
   /** The trading day it happened on (YYYY-MM-DD, reset-adjusted). */
   day: string;
-  /** The limit: an equity floor for loss rules, a number of days for MAX_TRADING_DAYS. */
+  /**
+   * The limit: an equity floor for loss rules, a number of days for MAX_TRADING_DAYS,
+   * the minutes a trade must keep from the news for NEWS_TRADING.
+   */
   limit: number;
-  /** The value that broke it: equity for loss rules, days traded for MAX_TRADING_DAYS. */
+  /**
+   * The value that broke it: equity for loss rules, days traded for MAX_TRADING_DAYS,
+   * the minutes between the trade and the news for NEWS_TRADING.
+   */
   value: number;
   message: string;
+  /** NEWS_TRADING only: the index in `trades` of the trade that broke it. */
+  trade?: number;
+  /** NEWS_TRADING only: the news it was too close to. */
+  news?: NewsWindow;
 }
 
 export interface ProfitTargetProgress {
@@ -223,6 +275,35 @@ export interface ConsistencyProgress {
   met: boolean;
 }
 
+/** The window NEWS_TRADING keeps trades out of, around one news event. */
+export interface NewsWindow {
+  bank: string;
+  name: string;
+  currency: string;
+  /** The release (ISO 8601, UTC). */
+  time: string;
+  /** No trade may be opened or closed after this... */
+  start: string;
+  /** ...and before this. A trade exactly at either edge is allowed. */
+  end: string;
+}
+
+export interface NewsTradingProgress {
+  code: "NEWS_TRADING";
+  minutesBefore: number;
+  minutesAfter: number;
+  /** How many news events were given. */
+  events: number;
+  /** Trade opens and closes checked so far: their instrument has a known currency. */
+  checked: number;
+  /** Trade opens and closes not checked: no symbol, or a symbol with no known currency. */
+  unchecked: number;
+  /** The symbols that were not checked, so you can add them to `instruments`. */
+  uncheckedSymbols: string[];
+  /** The first window not yet over at the last event, in any currency; null when none is left. */
+  nextWindow: NewsWindow | null;
+}
+
 export type RuleProgress =
   | ProfitTargetProgress
   | MaxDailyLossProgress
@@ -230,7 +311,8 @@ export type RuleProgress =
   | TrailingDrawdownProgress
   | MinTradingDaysProgress
   | MaxTradingDaysProgress
-  | ConsistencyProgress;
+  | ConsistencyProgress
+  | NewsTradingProgress;
 
 /** One trading day of the evaluated history. */
 export interface DaySummary {

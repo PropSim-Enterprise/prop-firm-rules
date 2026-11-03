@@ -10,7 +10,8 @@ import {
 import { InvalidInputError } from "./errors.js";
 import { tidy } from "./math.js";
 import { type ResolvedRule, resolveRules } from "./parse-rules.js";
-import { ruleBreach, ruleMet, ruleProgress } from "./rules/index.js";
+import { resolveNews } from "./news.js";
+import { type RuleContext, ruleBreach, ruleMet, ruleProgress } from "./rules/index.js";
 import { dayIndexOf, dayKeyOf, offsetResolver, toIso } from "./time.js";
 import { buildTimeline, type TimelineEvent } from "./timeline.js";
 import type {
@@ -27,6 +28,7 @@ interface Setup {
   startingBalance: number;
   rules: ResolvedRule[];
   events: TimelineEvent[];
+  context: RuleContext;
   dayOf: (ms: number) => number;
   source: ActivitySource;
   /** Without a PROFIT_TARGET there is nothing to pass (a funded account): it can only fail. */
@@ -46,18 +48,23 @@ function prepare(input: ChallengeInput): Setup {
   if (!isRecord(input)) throw new InvalidInputError("input must be an object");
   const rules = resolveRules(input.rules);
   const offsetAt = offsetResolver(input.dayResetUtcOffsetMinutes);
+  const news = resolveNews(input.newsEvents);
+  if (input.newsEvents === undefined && rules.some((rule) => rule.code === "NEWS_TRADING")) {
+    throw new InvalidInputError("NEWS_TRADING needs newsEvents: pass [] if there is no news in the period");
+  }
   return {
     startingBalance: positiveNumber(input.startingBalance, "startingBalance"),
     rules,
     events: buildTimeline(input.snapshots, input.trades),
+    context: { news },
     dayOf: (ms) => dayIndexOf(ms, offsetAt),
     source: input.trades === undefined || input.trades === null ? "balance" : "trades",
     canPass: rules.some((rule) => rule.code === "PROFIT_TARGET"),
   };
 }
 
-function breachAt(rule: ResolvedRule, state: AccountState, time: number): Breach | null {
-  const draft = ruleBreach(rule, state);
+function breachAt(setup: Setup, rule: ResolvedRule, state: AccountState, time: number): Breach | null {
+  const draft = ruleBreach(rule, state, setup.context);
   if (!draft) return null;
   const dayIndex = currentDay(state)?.index ?? 0;
   return { code: rule.code, time: toIso(time), day: dayKeyOf(dayIndex), ...draft };
@@ -66,7 +73,7 @@ function breachAt(rule: ResolvedRule, state: AccountState, time: number): Breach
 /** Breaches first: a rule broken at the same moment the target is reached still fails the challenge. */
 function checkPoint(setup: Setup, state: AccountState, time: number): Outcome | null {
   const breaches = setup.rules
-    .map((rule) => breachAt(rule, state, time))
+    .map((rule) => breachAt(setup, rule, state, time))
     .filter((breach): breach is Breach => breach !== null);
   if (breaches.length > 0) return { status: "failed", breaches, endedAt: time };
   if (setup.canPass && setup.rules.every((rule) => ruleMet(rule, state))) {
@@ -139,7 +146,7 @@ function tidyNumbers<T>(value: T): T {
  *
  * The history is replayed in time order. The challenge fails at the first
  * moment any limit rule is broken (MAX_DAILY_LOSS, MAX_OVERALL_LOSS,
- * TRAILING_DRAWDOWN, MAX_TRADING_DAYS) and passes at the first moment every
+ * TRAILING_DRAWDOWN, MAX_TRADING_DAYS, NEWS_TRADING) and passes at the first moment every
  * objective is met (PROFIT_TARGET, plus MIN_TRADING_DAYS and CONSISTENCY when
  * present). Data after that moment is ignored. Throws InvalidInputError on bad input.
  */
@@ -151,7 +158,7 @@ export function evaluateChallenge(input: ChallengeInput): ChallengeResult {
     status: outcome.status,
     endedAt: outcome.endedAt === null ? null : toIso(outcome.endedAt),
     breaches: outcome.breaches,
-    progress: setup.rules.map((rule) => ruleProgress(rule, state)),
+    progress: setup.rules.map((rule) => ruleProgress(rule, state, setup.context)),
     metrics: metricsOf(state),
   });
 }

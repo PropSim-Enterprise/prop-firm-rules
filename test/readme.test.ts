@@ -6,6 +6,7 @@ import {
   dailyLossFloor,
   dailyLossLimit,
   evaluateChallenge,
+  instrumentCurrencies,
   maxLossFloor,
   newYorkCloseOffset,
   parseRules,
@@ -143,6 +144,63 @@ describe("README", () => {
     expect(requiredProfitForConsistency(3_000, 40)).toBe(7_500);
     expect(tradingDayKey("2026-03-02T22:30:00Z", 120)).toBe("2026-03-03");
     expect(newYorkCloseOffset("2026-07-01T12:00:00Z")).toBe(180);
+  });
+
+  it("news rule section", () => {
+    // What fetchIRDNewsWindows gives for the Fed's decision of 28 October 2026.
+    const newsEvents = [{ bank: "fed", currency: "USD", t: "2026-10-28T18:00:00.000Z", name: "Federal Reserve" }];
+    const result = evaluateChallenge({
+      startingBalance: 100_000,
+      rules: [
+        { code: "MAX_DAILY_LOSS", params: { maxPercent: 5 } },
+        { code: "NEWS_TRADING", params: { minutesBefore: 2, minutesAfter: 2 } },
+      ],
+      snapshots: [
+        { time: "2026-10-28T17:30:00Z", balance: 100_420, equity: 100_420 },
+        { time: "2026-10-28T18:20:00Z", balance: 101_030, equity: 101_030 },
+      ],
+      trades: [
+        { openTime: "2026-10-28T14:00:00Z", closeTime: "2026-10-28T17:30:00Z", profit: 420, symbol: "EURUSD" },
+        { openTime: "2026-10-28T18:01:00Z", closeTime: "2026-10-28T18:20:00Z", profit: 610, symbol: "XAUUSD" },
+      ],
+      newsEvents,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.breaches).toEqual([
+      {
+        code: "NEWS_TRADING",
+        time: "2026-10-28T18:01:00.000Z",
+        day: "2026-10-28",
+        limit: 2,
+        value: 1,
+        message:
+          "XAUUSD trade opened 1 minute after the Federal Reserve announcement (USD) at 2026-10-28T18:00:00.000Z; " +
+          "trades must keep 2 minutes after it",
+        trade: 1,
+        news: {
+          bank: "fed",
+          name: "Federal Reserve",
+          currency: "USD",
+          time: "2026-10-28T18:00:00.000Z",
+          start: "2026-10-28T17:58:00.000Z",
+          end: "2026-10-28T18:02:00.000Z",
+        },
+      },
+    ]);
+
+    for (const symbol of ["EURUSD", "EUR/USD", "eurusd.raw", "EURUSDm"]) {
+      expect(instrumentCurrencies(symbol)).toEqual(["EUR", "USD"]);
+    }
+    for (const symbol of ["XAUUSD", "XAGUSD", "BTCUSD", "US30", "NAS100", "US500", "USOIL"]) {
+      expect(instrumentCurrencies(symbol)).toEqual(["USD"]);
+    }
+    expect(["GER40", "UK100", "JP225", "AUS200"].map((symbol) => instrumentCurrencies(symbol))).toEqual([
+      ["EUR"],
+      ["GBP"],
+      ["JPY"],
+      ["AUD"],
+    ]);
   });
 
   it("landing page templates section", () => {

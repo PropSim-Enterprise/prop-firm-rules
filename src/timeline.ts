@@ -1,6 +1,6 @@
 import { InvalidInputError } from "./errors.js";
 import { toMillis } from "./time.js";
-import { finiteNumber, isRecord } from "./validate.js";
+import { describe, finiteNumber, isRecord } from "./validate.js";
 
 export interface SnapshotEvent {
   kind: "snapshot";
@@ -12,12 +12,17 @@ export interface SnapshotEvent {
 export interface TradeOpenEvent {
   kind: "open";
   time: number;
+  /** The trade's index in the input. */
+  trade: number;
+  symbol: string | null;
 }
 
 export interface TradeCloseEvent {
   kind: "close";
   time: number;
   profit: number;
+  trade: number;
+  symbol: string | null;
 }
 
 export type TimelineEvent = SnapshotEvent | TradeOpenEvent | TradeCloseEvent;
@@ -59,14 +64,23 @@ function snapshotEvents(snapshots: unknown): SnapshotEvent[] {
   return events;
 }
 
+function symbolOf(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return value;
+  throw new InvalidInputError(`${label} must be a string, got ${describe(value)}`);
+}
+
 function tradeEvents(value: unknown, index: number): TimelineEvent[] {
   const label = `trades[${index}]`;
   const trade = record(value, label);
-  const open: TradeOpenEvent = { kind: "open", time: toMillis(trade.openTime, `${label}.openTime`) };
+  const symbol = symbolOf(trade.symbol, `${label}.symbol`);
+  const openTime = toMillis(trade.openTime, `${label}.openTime`);
+  const open: TradeOpenEvent = { kind: "open", time: openTime, trade: index, symbol };
   if (trade.closeTime === undefined || trade.closeTime === null) return [open];
   const closeTime = toMillis(trade.closeTime, `${label}.closeTime`);
   if (closeTime < open.time) throw new InvalidInputError(`${label}.closeTime is before its openTime`);
-  return [open, { kind: "close", time: closeTime, profit: finiteNumber(trade.profit, `${label}.profit`) }];
+  const profit = finiteNumber(trade.profit, `${label}.profit`);
+  return [open, { kind: "close", time: closeTime, profit, trade: index, symbol }];
 }
 
 /** Every snapshot and trade event in time order. Trades may come in any order. */

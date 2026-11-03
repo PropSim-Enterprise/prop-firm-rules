@@ -1,5 +1,6 @@
 import { InvalidInputError } from "./errors.js";
 import type { DailyLossBasis, Rule, RuleCode, TrailingSource } from "./types.js";
+import { windowMinutes } from "./news.js";
 import { describe, isRecord, percentNumber, positiveNumber } from "./validate.js";
 
 type Resolve<R> = R extends Rule ? { code: R["code"]; params: Required<R["params"]> } : never;
@@ -37,6 +38,19 @@ function choice<T extends string>(value: unknown, label: string, allowed: readon
   if (value === undefined) return fallback;
   if ((allowed as readonly unknown[]).includes(value)) return value as T;
   throw new InvalidInputError(`${label} must be one of ${allowed.join(", ")}, got ${describe(value)}`);
+}
+
+function instrumentMap(value: unknown, label: string): Readonly<Record<string, readonly string[]>> {
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw new InvalidInputError(`${label} must be an object of symbol: currencies`);
+  return Object.fromEntries(
+    Object.entries(value).map(([symbol, codes]) => {
+      const valid =
+        Array.isArray(codes) && codes.every((code) => typeof code === "string" && /^[A-Za-z]{3}$/.test(code));
+      if (!valid) throw new InvalidInputError(`${label}.${symbol} must be an array of three-letter currency codes`);
+      return [symbol, (codes as string[]).map((code) => code.toUpperCase())];
+    }),
+  );
 }
 
 function flag(value: unknown, label: string): boolean {
@@ -81,6 +95,18 @@ const PARSERS: { readonly [C in RuleCode]: (p: Params) => ResolvedRule } = {
     code: "CONSISTENCY",
     params: { maxDayPercent: percentNumber(p.maxDayPercent, "CONSISTENCY.maxDayPercent") },
   }),
+  NEWS_TRADING: (p) => {
+    const minutesBefore = windowMinutes(p.minutesBefore, "NEWS_TRADING.minutesBefore");
+    return {
+      code: "NEWS_TRADING",
+      params: {
+        minutesBefore,
+        minutesAfter:
+          p.minutesAfter === undefined ? minutesBefore : windowMinutes(p.minutesAfter, "NEWS_TRADING.minutesAfter"),
+        instruments: instrumentMap(p.instruments, "NEWS_TRADING.instruments"),
+      },
+    };
+  },
 };
 
 export const RULE_CODES = Object.keys(PARSERS) as RuleCode[];

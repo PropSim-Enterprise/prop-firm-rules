@@ -21,11 +21,11 @@ describe("parseRules", () => {
 
   it("throws on an unknown code unless told to skip it", () => {
     const rules = [
-      { code: "NEWS_TRADING", params: { allowed: false } },
+      { code: "WEEKEND_HOLDING", params: { allowed: false } },
       { code: "MAX_OVERALL_LOSS", params: { maxPercent: 10 } },
     ];
 
-    expect(() => parseRules(rules)).toThrow('rules[0] has unknown code "NEWS_TRADING"');
+    expect(() => parseRules(rules)).toThrow('rules[0] has unknown code "WEEKEND_HOLDING"');
     expect(parseRules(rules, { ignoreUnknown: true })).toEqual([
       { code: "MAX_OVERALL_LOSS", params: { maxPercent: 10 } },
     ]);

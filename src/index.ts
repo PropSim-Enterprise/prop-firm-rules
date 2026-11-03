@@ -13,6 +13,8 @@ export {
   type TrailingDrawdownInput,
   trailingDrawdownFloor,
 } from "./helpers.js";
+export { BANK_CURRENCIES, type IRDNewsOptions, newsWindowsFromIRD } from "./ird.js";
+export { DEFAULT_INSTRUMENTS, instrumentCurrencies, newsWindows } from "./news.js";
 export { type ParseRulesOptions, parseRules, type RuleLike } from "./parse-rules.js";
 export { newYorkCloseOffset, tradingDayKey } from "./time.js";
 export type {
@@ -35,6 +37,10 @@ export type {
   MaxTradingDaysRule,
   MinTradingDaysProgress,
   MinTradingDaysRule,
+  NewsEvent,
+  NewsTradingProgress,
+  NewsTradingRule,
+  NewsWindow,
   ProfitTargetProgress,
   ProfitTargetRule,
   Rule,

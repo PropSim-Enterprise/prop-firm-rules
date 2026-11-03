@@ -1,4 +1,4 @@
-import type { SnapshotEvent, TimelineEvent } from "./timeline.js";
+import type { SnapshotEvent, TimelineEvent, TradeCloseEvent, TradeOpenEvent } from "./timeline.js";
 
 /** Where trading days and daily profit come from. */
 export type ActivitySource = "trades" | "balance";
@@ -31,6 +31,10 @@ export interface AccountState {
   tradingDays: number;
   /** Trading days seen so far, oldest first. The last one is the current day. */
   days: DayRecord[];
+  /** Epoch ms of the last applied event, or null before the first. */
+  time: number | null;
+  /** Every trade open and close applied so far, in time order. */
+  tradeEvents: (TradeOpenEvent | TradeCloseEvent)[];
 }
 
 /** A flat account at its starting balance, before any snapshot or trade. */
@@ -47,6 +51,8 @@ export function createAccount(startingBalance: number): AccountState {
     closedProfit: 0,
     tradingDays: 0,
     days: [],
+    time: null,
+    tradeEvents: [],
   };
 }
 
@@ -122,7 +128,20 @@ function applySnapshot(state: AccountState, snapshot: SnapshotEvent, source: Act
 
 /** Applies one event. Call enterDay with the event's trading day first. */
 export function applyEvent(state: AccountState, event: TimelineEvent, source: ActivitySource): void {
-  if (event.kind === "snapshot") applySnapshot(state, event, source);
-  else if (event.kind === "open") markTraded(state);
+  state.time = event.time;
+  if (event.kind === "snapshot") return applySnapshot(state, event, source);
+  state.tradeEvents.push(event);
+  if (event.kind === "open") markTraded(state);
   else addProfit(state, event.profit);
+}
+
+/** The trade opens and closes at the instant of the last applied event. */
+export function tradeEventsNow(state: AccountState): (TradeOpenEvent | TradeCloseEvent)[] {
+  const now: (TradeOpenEvent | TradeCloseEvent)[] = [];
+  for (let i = state.tradeEvents.length - 1; i >= 0; i -= 1) {
+    const event = state.tradeEvents[i];
+    if (!event || event.time !== state.time) break;
+    now.unshift(event);
+  }
+  return now;
 }
